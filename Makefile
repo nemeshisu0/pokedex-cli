@@ -1,18 +1,22 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -O2
-LIBS = -lcurl
-TARGET = pokedex
+CC      = gcc
+CFLAGS  = -Wall -Wextra -O2
+LDFLAGS = -lcurl
+PREFIX  = /usr/local
+TARGET  = pokedex
+SRCS    = main.c cJSON.c
+
+.PHONY: all clean install uninstall
 
 all: $(TARGET)
 
-$(TARGET): main.c cJSON.c
-	$(CC) $(CFLAGS) -o $(TARGET) main.c cJSON.c $(LIBS)
+$(TARGET): $(SRCS) cJSON.h
+	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET) $(LDFLAGS)
+
+install: $(TARGET)
+	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 
 clean:
 	rm -f $(TARGET)
-
-install: $(TARGET)
-	install -m 755 $(TARGET) /usr/local/bin/
-
-uninstall:
-	rm -f /usr/local/bin/$(TARGET)
