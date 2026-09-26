@@ -15,6 +15,13 @@
 #define MAGENTA "\033[35m"
 #define CYAN    "\033[36m"
 
+// 780 = base stat total più alto conosciuto tra le forme "standard"
+// (es. Mega Rayquaza, Mega Mewtwo X/Y). Usato solo come riferimento visivo,
+// modificalo pure se preferisci un altro valore.
+#define BST_MAX 780
+
+typedef enum { LANG_EN, LANG_IT } Lang;
+
 // Struttura per memorizzare la risposta HTTP in memoria
 struct MemoryStruct {
     char *memory;
@@ -76,14 +83,41 @@ struct MemoryStruct http_get(const char *url, long *http_code_out) {
     return chunk;
 }
 
+// Piccolo helper per scegliere la stringa giusta in base alla lingua attiva.
+static const char *L(Lang lang, const char *it, const char *en) {
+    return lang == LANG_IT ? it : en;
+}
+
+// Etichette localizzate per i singoli stat (HP, Attacco, ecc.). Il confronto
+// per determinare il colore della barra usa sempre il nome inglese originale
+// restituito dall'API, che non cambia con la lingua.
+static const char *stat_label(Lang lang, const char *stat_name) {
+    if (lang == LANG_IT) {
+        if (strcmp(stat_name, "hp") == 0) return "PS";
+        if (strcmp(stat_name, "attack") == 0) return "Attacco";
+        if (strcmp(stat_name, "defense") == 0) return "Difesa";
+        if (strcmp(stat_name, "special-attack") == 0) return "Att. Speciale";
+        if (strcmp(stat_name, "special-defense") == 0) return "Dif. Speciale";
+        if (strcmp(stat_name, "speed") == 0) return "Velocita'";
+        return stat_name;
+    }
+    if (strcmp(stat_name, "hp") == 0) return "HP";
+    if (strcmp(stat_name, "attack") == 0) return "Attack";
+    if (strcmp(stat_name, "defense") == 0) return "Defense";
+    if (strcmp(stat_name, "special-attack") == 0) return "Sp. Atk";
+    if (strcmp(stat_name, "special-defense") == 0) return "Sp. Def";
+    if (strcmp(stat_name, "speed") == 0) return "Speed";
+    return stat_name;
+}
+
 // Disegna una barra visiva per le statistiche (es. [██████░░░░] 85/200)
-void print_stat_bar(const char *label, int value, const char *color) {
+void print_stat_bar(const char *display_label, int value, const char *color) {
     int max_val = 200;
     int bar_width = 20;
     int filled = (value * bar_width) / max_val;
     if (filled > bar_width) filled = bar_width;
 
-    printf("  %-16s %s[", label, color);
+    printf("  %-16s %s[", display_label, color);
     for (int i = 0; i < filled; i++) printf("■");
     for (int i = filled; i < bar_width; i++) printf(" ");
     printf("]%s %3d\n", RESET, value);
@@ -92,16 +126,18 @@ void print_stat_bar(const char *label, int value, const char *color) {
 // Scarica lo sprite in un file temporaneo e lo mostra a colori nel
 // terminale usando 'chafa'. Se chafa non è installato o lo sprite non è
 // disponibile, stampa un messaggio informativo invece di fallire.
-void print_sprite(const char *sprite_url) {
+void print_sprite(const char *sprite_url, Lang lang) {
     if (!sprite_url) {
-        fprintf(stderr, YELLOW "(sprite non disponibile per questo Pokémon)\n" RESET);
+        fprintf(stderr, YELLOW "%s\n" RESET,
+                L(lang, "(sprite non disponibile per questo Pokémon)",
+                        "(sprite not available for this Pokémon)"));
         return;
     }
 
     long code = 0;
     struct MemoryStruct img = http_get(sprite_url, &code);
     if (!img.memory || code != 200) {
-        fprintf(stderr, YELLOW "(sprite non disponibile)\n" RESET);
+        fprintf(stderr, YELLOW "%s\n" RESET, L(lang, "(sprite non disponibile)", "(sprite not available)"));
         free(img.memory);
         return;
     }
@@ -126,16 +162,53 @@ void print_sprite(const char *sprite_url) {
     snprintf(cmd, sizeof(cmd), "chafa --size=32x16 '%s' 2>/dev/null", tmp_path);
     int ret = system(cmd);
     if (ret != 0) {
-        printf(YELLOW "(installa 'chafa' per vedere lo sprite: sudo pacman -S chafa)\n" RESET);
+        printf(YELLOW "%s\n" RESET,
+               L(lang, "(installa 'chafa' per vedere lo sprite: sudo pacman -S chafa)",
+                       "(install 'chafa' to see the sprite: sudo pacman -S chafa)"));
     }
 
     remove(tmp_path);
 }
 
-// Recupera e stampa il flavor text (descrizione del Pokédex) in inglese
-// interrogando l'endpoint /pokemon-species/.
-void print_flavor_text(const char *species_url) {
+// Recupera da un endpoint PokéAPI che espone un array "names" (es. /type/{id})
+// il nome localizzato per il language_code richiesto (es. "it"). Se non lo
+// trova, lascia invariato il valore di fallback già presente in 'out'.
+void fetch_localized_name(const char *url, const char *language_code, char *out, size_t outsize) {
+    long code = 0;
+    struct MemoryStruct res = http_get(url, &code);
+    if (!res.memory || code != 200) {
+        free(res.memory);
+        return;
+    }
+
+    cJSON *json = cJSON_Parse(res.memory);
+    free(res.memory);
+    if (!json) return;
+
+    cJSON *names = cJSON_GetObjectItemCaseSensitive(json, "names");
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, names) {
+        cJSON *lang_obj = cJSON_GetObjectItemCaseSensitive(entry, "language");
+        cJSON *lang_name = cJSON_GetObjectItemCaseSensitive(lang_obj, "name");
+        cJSON *name_val = cJSON_GetObjectItemCaseSensitive(entry, "name");
+
+        if (lang_name && name_val && strcmp(lang_name->valuestring, language_code) == 0) {
+            strncpy(out, name_val->valuestring, outsize - 1);
+            out[outsize - 1] = '\0';
+            break;
+        }
+    }
+
+    cJSON_Delete(json);
+}
+
+// Recupera e stampa il flavor text (descrizione del Pokédex) nella lingua
+// richiesta, interrogando l'endpoint /pokemon-species/. Se la lingua
+// richiesta non ha una entry disponibile, ripiega sull'inglese.
+void print_flavor_text(const char *species_url, Lang lang) {
     if (!species_url) return;
+
+    const char *primary_lang = (lang == LANG_IT) ? "it" : "en";
 
     long code = 0;
     struct MemoryStruct species = http_get(species_url, &code);
@@ -150,36 +223,66 @@ void print_flavor_text(const char *species_url) {
 
     cJSON *entries = cJSON_GetObjectItemCaseSensitive(json, "flavor_text_entries");
     cJSON *entry = NULL;
+    cJSON *fallback_entry = NULL; // prima entry in inglese, usata come ripiego
+
+    const char *found_text = NULL;
+
     cJSON_ArrayForEach(entry, entries) {
-        cJSON *lang = cJSON_GetObjectItemCaseSensitive(entry, "language");
-        cJSON *lang_name = cJSON_GetObjectItemCaseSensitive(lang, "name");
+        cJSON *lang_obj = cJSON_GetObjectItemCaseSensitive(entry, "language");
+        cJSON *lang_name = cJSON_GetObjectItemCaseSensitive(lang_obj, "name");
         cJSON *text = cJSON_GetObjectItemCaseSensitive(entry, "flavor_text");
+        if (!lang_name || !text) continue;
 
-        if (lang_name && text && strcmp(lang_name->valuestring, "en") == 0) {
-            // La PokéAPI inserisce '\n' e '\f' nel testo: li normalizziamo in spazi
-            char clean[512];
-            size_t j = 0;
-            for (size_t i = 0; text->valuestring[i] != '\0' && j < sizeof(clean) - 1; i++) {
-                char c = text->valuestring[i];
-                clean[j++] = (c == '\n' || c == '\f') ? ' ' : c;
-            }
-            clean[j] = '\0';
-
-            printf(BOLD "Descrizione:" RESET " %s\n\n", clean);
+        if (strcmp(lang_name->valuestring, primary_lang) == 0) {
+            found_text = text->valuestring;
             break;
         }
+        if (!fallback_entry && strcmp(lang_name->valuestring, "en") == 0) {
+            fallback_entry = entry;
+        }
+    }
+
+    if (!found_text && fallback_entry) {
+        cJSON *text = cJSON_GetObjectItemCaseSensitive(fallback_entry, "flavor_text");
+        if (text) found_text = text->valuestring;
+    }
+
+    if (found_text) {
+        // La PokéAPI inserisce '\n' e '\f' nel testo: li normalizziamo in spazi
+        char clean[512];
+        size_t j = 0;
+        for (size_t i = 0; found_text[i] != '\0' && j < sizeof(clean) - 1; i++) {
+            char c = found_text[i];
+            clean[j++] = (c == '\n' || c == '\f') ? ' ' : c;
+        }
+        clean[j] = '\0';
+
+        printf(BOLD "%s:" RESET " %s\n\n", L(lang, "Descrizione", "Description"), clean);
     }
 
     cJSON_Delete(json);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Uso: %s <nome-pokemon>\nEsempio: %s gengar\n", argv[0], argv[0]);
+    Lang lang = LANG_EN; // default: inglese
+    const char *pokemon = NULL;
+
+    // Parsing argomenti: il flag di lingua puo' stare prima o dopo il nome
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-it") == 0) {
+            lang = LANG_IT;
+        } else if (strcmp(argv[i], "-en") == 0) {
+            lang = LANG_EN;
+        } else if (!pokemon) {
+            pokemon = argv[i];
+        }
+    }
+
+    if (!pokemon) {
+        fprintf(stderr, "Uso: %s <nome-pokemon> [-it|-en]\nEsempio: %s gengar -it\n", argv[0], argv[0]);
         return 1;
     }
 
-    char *pokemon = argv[1];
     char url[256];
     snprintf(url, sizeof(url), "https://pokeapi.co/api/v2/pokemon/%s", pokemon);
 
@@ -195,7 +298,10 @@ int main(int argc, char *argv[]) {
     }
 
     if (http_code == 404) {
-        printf(RED "Errore: Pokémon '%s' non trovato!\n" RESET, pokemon);
+        printf(RED "%s '%s' %s\n" RESET,
+               L(lang, "Errore: Pokémon", "Error: Pokémon"),
+               pokemon,
+               L(lang, "non trovato!", "not found!"));
         free(chunk.memory);
         curl_global_cleanup();
         return 1;
@@ -227,7 +333,7 @@ int main(int argc, char *argv[]) {
     if (front_official && front_official->valuestring) sprite_url = front_official->valuestring;
     else if (front_default && front_default->valuestring) sprite_url = front_default->valuestring;
 
-    print_sprite(sprite_url);
+    print_sprite(sprite_url, lang);
     printf("\n");
 
     // --- Altezza e peso (l'API li restituisce in decimetri ed ettogrammi) ---
@@ -236,18 +342,29 @@ int main(int argc, char *argv[]) {
     double height_m = height_item ? height_item->valueint / 10.0 : 0.0;
     double weight_kg = weight_item ? weight_item->valueint / 10.0 : 0.0;
 
-    printf(BOLD "Altezza:" RESET " %.1f m    " BOLD "Peso:" RESET " %.1f kg\n\n", height_m, weight_kg);
+    printf(BOLD "%s:" RESET " %.1f m    " BOLD "%s:" RESET " %.1f kg\n\n",
+           L(lang, "Altezza", "Height"), height_m,
+           L(lang, "Peso", "Weight"), weight_kg);
 
-    // --- Tipi ---
-    printf(BOLD "Tipi:" RESET " ");
+    // --- Tipi (tradotti se lingua = it, con una chiamata extra per tipo) ---
+    printf(BOLD "%s:" RESET " ", L(lang, "Tipi", "Types"));
     cJSON *types = cJSON_GetObjectItemCaseSensitive(json, "types");
     cJSON *type_entry = NULL;
     cJSON_ArrayForEach(type_entry, types) {
         cJSON *type_obj = cJSON_GetObjectItemCaseSensitive(type_entry, "type");
         cJSON *t_name = cJSON_GetObjectItemCaseSensitive(type_obj, "name");
-        if (t_name) {
-            printf(YELLOW "[%s] " RESET, t_name->valuestring);
+        cJSON *t_url = cJSON_GetObjectItemCaseSensitive(type_obj, "url");
+        if (!t_name) continue;
+
+        char display_name[64];
+        strncpy(display_name, t_name->valuestring, sizeof(display_name) - 1);
+        display_name[sizeof(display_name) - 1] = '\0';
+
+        if (lang == LANG_IT && t_url && t_url->valuestring) {
+            fetch_localized_name(t_url->valuestring, "it", display_name, sizeof(display_name));
         }
+
+        printf(YELLOW "[%s] " RESET, display_name);
     }
     printf("\n\n");
 
@@ -255,14 +372,16 @@ int main(int argc, char *argv[]) {
     cJSON *species = cJSON_GetObjectItemCaseSensitive(json, "species");
     cJSON *species_url_item = cJSON_GetObjectItemCaseSensitive(species, "url");
     if (species_url_item && species_url_item->valuestring) {
-        print_flavor_text(species_url_item->valuestring);
+        print_flavor_text(species_url_item->valuestring, lang);
     }
 
-    printf(BOLD "Statistiche Base:" RESET "\n");
+    printf(BOLD "%s:" RESET "\n", L(lang, "Statistiche Base", "Base Stats"));
 
-    // --- Statistiche ---
+    // --- Statistiche + calcolo del Base Stat Total (BST) ---
     cJSON *stats = cJSON_GetObjectItemCaseSensitive(json, "stats");
     cJSON *stat_entry = NULL;
+    int bst_total = 0;
+
     cJSON_ArrayForEach(stat_entry, stats) {
         cJSON *base_stat = cJSON_GetObjectItemCaseSensitive(stat_entry, "base_stat");
         cJSON *stat_obj = cJSON_GetObjectItemCaseSensitive(stat_entry, "stat");
@@ -275,10 +394,12 @@ int main(int argc, char *argv[]) {
             else if (strcmp(s_name->valuestring, "defense") == 0) color = BLUE;
             else if (strcmp(s_name->valuestring, "speed") == 0) color = MAGENTA;
 
-            print_stat_bar(s_name->valuestring, base_stat->valueint, color);
+            print_stat_bar(stat_label(lang, s_name->valuestring), base_stat->valueint, color);
+            bst_total += base_stat->valueint;
         }
     }
-    printf("\n");
+
+    printf(BOLD "  %s:" RESET " %d / %d\n\n", L(lang, "Totale", "Total"), bst_total, BST_MAX);
 
     // Pulizia memoria
     cJSON_Delete(json);
