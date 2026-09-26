@@ -1,0 +1,11 @@
+# Eseguibili e file oggetto
+pokedex
+*.o
+*.out
+
+# File temporanei editor / OS
+*.swp
+.DS_Store
+
+# Cartelle di build
+build/
