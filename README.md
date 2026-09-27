@@ -116,3 +116,9 @@ MIT — see [LICENSE](LICENSE) for details.
 ## Credits
 
 Data provided by [PokéAPI](https://pokeapi.co). Sprite rendering by [chafa](https://hpjansson.org/chafa/). JSON parsing by [cJSON](https://github.com/DaveGamble/cJSON).
+
+## 🖥️ Preview
+
+<div align="center">
+  <img src="preview.png" alt="Pokédex CLI Preview" width="650">
+</div>
