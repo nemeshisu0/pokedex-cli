@@ -5,6 +5,10 @@
 ![API](https://img.shields.io/badge/data-Pok%C3%A9API-FFCB05?logo=pokemon&logoColor=3B4CCA)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
+<div align="center">
+  <img src="preview.png" alt="Pokédex CLI Preview" width="650">
+</div>
+
 A terminal-based Pokédex written in C. Fetches live data from [PokéAPI](https://pokeapi.co) and renders it with ANSI colors, a real rendered sprite (via [chafa](https://hpjansson.org/chafa/)), and full bilingual output.
 
 ```
@@ -116,9 +120,3 @@ MIT — see [LICENSE](LICENSE) for details.
 ## Credits
 
 Data provided by [PokéAPI](https://pokeapi.co). Sprite rendering by [chafa](https://hpjansson.org/chafa/). JSON parsing by [cJSON](https://github.com/DaveGamble/cJSON).
-
-## 🖥️ Preview
-
-<div align="center">
-  <img src="preview.png" alt="Pokédex CLI Preview" width="650">
-</div>
